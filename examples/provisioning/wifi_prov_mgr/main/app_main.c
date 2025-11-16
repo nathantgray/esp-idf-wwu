@@ -17,9 +17,16 @@
 #include <esp_log.h>
 #include <esp_wifi.h>
 #include <esp_event.h>
+
+#include <esp_sleep.h>
+#include <esp_timer.h>
+#include "driver/gpio.h" //NEED to find how to work 
+
 #include <nvs_flash.h>
 
+
 #include <wifi_provisioning/manager.h>
+
 
 #ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
 #include <wifi_provisioning/scheme_ble.h>
@@ -107,7 +114,15 @@ static EventGroupHandle_t wifi_event_group;
 #define PROV_TRANSPORT_BLE      "ble"
 #define QRCODE_BASE_URL         "https://espressif.github.io/esp-jumpstart/qrcode.html"
 
-/* Event handler for catching system events */
+//Sleep definitions
+#define mS_TO_S_FACTOR 1000ULL  /* Conversion factor for milli seconds to seconds */
+#define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
+#define TIME_TO_SLEEP_DEBUG  10        /* Time ESP32 will go to sleep (in seconds) */
+#define TIME_TO_SLEEP_SHORT  60        /* Time ESP32 will go to sleep (in seconds) */
+#define TIME_TO_SLEEP_LONG  300        /* Time ESP32 will go to sleep (in seconds) */
+#define TIME_TO_SLEEP_DEAD  3600        /* Time ESP32 will go to sleep (in seconds) */
+
+ /* Event handler for catching system events */
 static void event_handler(void* arg, esp_event_base_t event_base,
                           int32_t event_id, void* event_data)
 {
@@ -545,9 +560,35 @@ void app_main(void)
         xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
     }
 #else
+    //zero-initialize the config structure.
+    gpio_config_t io_conf = {};
+    //disable interrupt
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    //set as output mode
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    //bit mask of the pins that you want to set,e.g.GPIO14
+    io_conf.pin_bit_mask = 0000000000000000000000000100000000000000; // GPIO in meun config or bit mask
+    //disable pull-down mode
+    io_conf.pull_down_en = 0;
+    //disable pull-up mode
+    io_conf.pull_up_en = 0;
+    //configure GPIO with the given settings
+    gpio_config(&io_conf);
+
+
+    unsigned long wakeTime;
+    wakeTime = esp_timer_get_time() / 1000ULL; //Convert to milliseconds
+    int on_interval = 20000; 
+    int time_to_sleep = TIME_TO_SLEEP_DEBUG;
+    esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
      while (1) {
-         ESP_LOGI(TAG, "Hello World!");
-         vTaskDelay(1000 / portTICK_PERIOD_MS);
+        ESP_LOGI(TAG, "Hello World!");
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+        if ((esp_timer_get_time() / 1000ULL) - wakeTime > on_interval) 
+        {
+            esp_deep_sleep_start();
+        }
      }
 #endif
 
