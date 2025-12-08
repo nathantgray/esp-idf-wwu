@@ -574,8 +574,8 @@ void app_main(void)
     io_conf.pull_up_en = 0;
     //configure GPIO with the given settings
     gpio_config(&io_conf);
-
-
+    
+    gpio_set_level(GPIO_NUM_14, 1); // Set GPIO high to power on the device connected to this GPIO
     unsigned long wakeTime;
     wakeTime = esp_timer_get_time() / 1000ULL; //Convert to milliseconds
     int on_interval = 20000; 
