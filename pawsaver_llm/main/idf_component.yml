@@ -1,0 +1,14 @@
+dependencies:
+  qrcode: "^0.1.0"
+depends_components:
+  - esp_driver_gpio
+  - esp_adc
+  - esp_driver_i2c
+  - mqtt
+  - json
+  - wifi_provisioning
+  - esp_wifi
+  - nvs_flash
+  - esp_event
+  - mlx90614
+
