@@ -109,6 +109,9 @@ static esp_err_t example_get_sec2_verifier(const char **verifier, uint16_t *veri
 const int WIFI_CONNECTED_EVENT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 
+/* Button press flag for reprovisioning */
+static volatile bool button_pressed = false;
+
 #define PROV_QR_VERSION         "v1"
 #define PROV_TRANSPORT_SOFTAP   "softap"
 #define PROV_TRANSPORT_BLE      "ble"
@@ -318,6 +321,12 @@ const wifi_prov_event_handler_t wifi_prov_event_handler = {
     .user_data = NULL,
 };
 #endif /* EXAMPLE_PROV_ENABLE_APP_CALLBACK */
+
+/* GPIO interrupt handler for button press */
+static void IRAM_ATTR gpio_isr_handler(void* arg)
+{
+    button_pressed = true;
+}
 
 void app_main(void)
 {
@@ -560,33 +569,69 @@ void app_main(void)
         xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
     }
 #else
-    //zero-initialize the config structure.
+    // Define GPIO pins
+    #define GPIO_OUTPUT_PIN      GPIO_NUM_14  // GPIO for powering device
+    #define GPIO_WAKEUP_PIN      GPIO_NUM_1   // GPIO for wakeup button
+
+    // Configure output GPIO (GPIO14) for powering device
     gpio_config_t io_conf = {};
-    //disable interrupt
     io_conf.intr_type = GPIO_INTR_DISABLE;
-    //set as output mode
     io_conf.mode = GPIO_MODE_OUTPUT;
-    //bit mask of the pins that you want to set,e.g.GPIO14
-    io_conf.pin_bit_mask = 0000000000000000000000000100000000000000; // GPIO in meun config or bit mask
-    //disable pull-down mode
-    io_conf.pull_down_en = 0;
-    //disable pull-up mode
-    io_conf.pull_up_en = 0;
-    //configure GPIO with the given settings
+    io_conf.pin_bit_mask = (1ULL << GPIO_OUTPUT_PIN);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     gpio_config(&io_conf);
+
+    // Configure wakeup button GPIO (GPIO1) as input with pull-up and interrupt
+    gpio_config_t wakeup_config = {
+        .pin_bit_mask = (1ULL << GPIO_WAKEUP_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,    // Enable pull-up for button
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,      // Trigger on falling edge (button press)
+    };
+    gpio_config(&wakeup_config);
     
-    gpio_set_level(GPIO_NUM_14, 1); // Set GPIO high to power on the device connected to this GPIO
+    // Install GPIO ISR service and add handler for the button
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_WAKEUP_PIN, gpio_isr_handler, (void*) GPIO_WAKEUP_PIN);
+    
+    // Set GPIO14 high to power on the device connected to this GPIO
+    gpio_set_level(GPIO_OUTPUT_PIN, 1);
+    
     unsigned long wakeTime;
-    wakeTime = esp_timer_get_time() / 1000ULL; //Convert to milliseconds
-    int on_interval = 20000; 
+    wakeTime = esp_timer_get_time() / 1000ULL; // Convert to milliseconds
+    int on_interval = 10000;  // 10 seconds in milliseconds
     int time_to_sleep = TIME_TO_SLEEP_DEBUG;
+    
+    // Configure timer wakeup
     esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
-     while (1) {
+    
+    // Configure GPIO wakeup - wake on LOW (button pressed pulls pin to ground)
+    esp_deep_sleep_enable_gpio_wakeup((1ULL << GPIO_WAKEUP_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
+    
+    ESP_LOGI(TAG, "Sleep enabled. Wake sources: timer (%d sec) and GPIO%d (button press)", time_to_sleep, GPIO_WAKEUP_PIN);
+
+    while (1) {
+        // Check if button was pressed
+        if (button_pressed) {
+            button_pressed = false;  // Reset flag
+            ESP_LOGI(TAG, "Button pressed! Resetting provisioning to connect to new WiFi...");
+            
+            // Disconnect WiFi and reset provisioning
+            esp_wifi_disconnect();
+            wifi_prov_mgr_reset_provisioning();
+            
+            ESP_LOGI(TAG, "Restarting device for new WiFi provisioning...");
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+            esp_restart();
+        }
+        
         ESP_LOGI(TAG, "Hello World!");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
         if ((esp_timer_get_time() / 1000ULL) - wakeTime > on_interval) 
-        {
+        {   
             esp_deep_sleep_start();
         }
      }
