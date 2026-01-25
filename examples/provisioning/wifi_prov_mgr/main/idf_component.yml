@@ -3,3 +3,5 @@ dependencies:
   espressif/mqtt: ^1.0.0
 depends_components:
 - esp_driver_gpio
+- mqtt
+- json

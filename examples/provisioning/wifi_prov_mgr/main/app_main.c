@@ -37,6 +37,8 @@
 #endif /* CONFIG_EXAMPLE_PROV_TRANSPORT_SOFTAP */
 #include "qrcode.h"
 
+#include "pawsaver.h"
+
 static const char *TAG = "app";
 
 #if CONFIG_EXAMPLE_PROV_SECURITY_VERSION_2
@@ -626,7 +628,35 @@ void app_main(void)
             vTaskDelay(1000 / portTICK_PERIOD_MS);
             esp_restart();
         }
-        
+        bool sensor_available = false;
+        pawsaver_data_t sensor_data = {0};
+        if (!sensor_available) {
+            sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
+            sensor_data.ambient_temp = -999.0f;  /* Sentinel value indicating no sensor */
+            sensor_data.object_temp = -999.0f;
+            // sensor_data.battery_voltage = pawsaver_battery_read();
+            sensor_data.mode = PAWSAVER_MODE_DEBUG;
+            ESP_LOGI(TAG, "Using debug data: battery=%.2fV", sensor_data.battery_voltage);
+        }
+        /* Initialize MQTT */
+        ESP_ERROR_CHECK(pawsaver_mqtt_init());
+
+        /* Wait for MQTT connection */
+        if (!pawsaver_mqtt_wait_connected(10000)) {
+            ESP_LOGE(TAG, "MQTT connection timeout");
+        } else {
+            /* Publish sensor data */
+            pawsaver_mqtt_publish(&sensor_data);
+
+            /* Wait for message to be sent */
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+
+        /* Cleanup */
+        pawsaver_mqtt_deinit();
+        if (sensor_available) {
+            // pawsaver_sensor_deinit();
+        }
         ESP_LOGI(TAG, "Hello World!");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
