@@ -38,6 +38,7 @@
 #include "qrcode.h"
 
 #include "pawsaver.h"
+#include "gy906.h"
 
 static const char *TAG = "app";
 
@@ -630,7 +631,25 @@ void app_main(void)
         }
         bool sensor_available = false;
         pawsaver_data_t sensor_data = {0};
-        if (!sensor_available) {
+        
+        /* Initialize GY-906 sensor */
+        if (gy906_init() == ESP_OK) {
+            sensor_available = true;
+            sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
+            
+            /* Read temperature from GY-906 */
+            if (gy906_read_both(&sensor_data.ambient_temp, &sensor_data.object_temp) == ESP_OK) {
+                ESP_LOGI(TAG, "GY-906 readings - Ambient: %.2f°C, Object: %.2f°C", 
+                         sensor_data.ambient_temp, sensor_data.object_temp);
+            } else {
+                ESP_LOGE(TAG, "Failed to read from GY-906");
+                sensor_data.ambient_temp = -999.0f;
+                sensor_data.object_temp = -999.0f;
+            }
+            // sensor_data.battery_voltage = pawsaver_battery_read();
+            sensor_data.mode = PAWSAVER_MODE_DEBUG;
+        } else {
+            ESP_LOGW(TAG, "GY-906 not available, using debug data");
             sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
             sensor_data.ambient_temp = -999.0f;  /* Sentinel value indicating no sensor */
             sensor_data.object_temp = -999.0f;
@@ -655,7 +674,7 @@ void app_main(void)
         /* Cleanup */
         pawsaver_mqtt_deinit();
         if (sensor_available) {
-            // pawsaver_sensor_deinit();
+            gy906_deinit();
         }
         ESP_LOGI(TAG, "Hello World!");
         vTaskDelay(1000 / portTICK_PERIOD_MS);
