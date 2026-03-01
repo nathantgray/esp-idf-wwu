@@ -635,7 +635,6 @@ void app_main(void)
         /* Initialize GY-906 sensor */
         if (gy906_init() == ESP_OK) {
             sensor_available = true;
-            sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
             
             /* Read temperature from GY-906 */
             if (gy906_read_both(&sensor_data.ambient_temp, &sensor_data.object_temp) == ESP_OK) {
@@ -664,6 +663,9 @@ void app_main(void)
         if (!pawsaver_mqtt_wait_connected(10000)) {
             ESP_LOGE(TAG, "MQTT connection timeout");
         } else {
+            /* Publish device discovery first */
+            ESP_ERROR_CHECK(publish_device_discovery());
+            
             /* Publish sensor data */
             pawsaver_mqtt_publish(&sensor_data);
 

@@ -194,3 +194,108 @@ void pawsaver_mqtt_deinit(void)
 
     ESP_LOGI(TAG, "MQTT client stopped");
 }
+
+esp_err_t publish_device_discovery(void)
+{
+    if (!mqtt_client) {
+        ESP_LOGE(TAG, "MQTT client not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Check connection status */
+    EventBits_t bits = xEventGroupGetBits(mqtt_event_group);
+    if (!(bits & MQTT_CONNECTED_BIT)) {
+        ESP_LOGW(TAG, "MQTT not connected, cannot publish");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Create common device information (shared by all sensors) */
+    cJSON *device = cJSON_CreateObject();
+    if (!device) {
+        ESP_LOGE(TAG, "Failed to create device object");
+        return ESP_ERR_NO_MEM;
+    }
+    
+    cJSON_AddStringToObject(device, "name", "PawSaver");
+    cJSON_AddStringToObject(device, "manufacturer", "PawSaver Project");
+    cJSON_AddStringToObject(device, "model", "ESP32 TempMonitor");
+    cJSON_AddStringToObject(device, "sw_version", "1.0.0");
+    
+    cJSON *identifiers = cJSON_CreateArray();
+    cJSON_AddItemToArray(identifiers, cJSON_CreateString("pawsaver_esp32"));
+    cJSON_AddItemToObject(device, "identifiers", identifiers);
+
+    /* Publish Ambient Temperature Sensor Discovery */
+    cJSON *ambient_config = cJSON_CreateObject();
+    if (ambient_config) {
+        cJSON_AddStringToObject(ambient_config, "name", "Ambient Temperature");
+        cJSON_AddStringToObject(ambient_config, "unique_id", "pawsaver_ambient_temp");
+        cJSON_AddStringToObject(ambient_config, "state_topic", CONFIG_PAWSAVER_MQTT_TOPIC);
+        cJSON_AddStringToObject(ambient_config, "unit_of_measurement", "°C");
+        cJSON_AddStringToObject(ambient_config, "value_template", "{{ value_json.ambient }}");
+        cJSON_AddStringToObject(ambient_config, "device_class", "temperature");
+        cJSON_AddItemToObject(ambient_config, "device", cJSON_Duplicate(device, 1));
+        
+        char *ambient_payload = cJSON_PrintUnformatted(ambient_config);
+        cJSON_Delete(ambient_config);
+        
+        if (ambient_payload) {
+            esp_mqtt_client_publish(mqtt_client,
+                                    "homeassistant/sensor/pawsaver/ambient_temperature/config",
+                                    ambient_payload, 0, 1, 1);
+            ESP_LOGI(TAG, "Published ambient temp discovery");
+            free(ambient_payload);
+        }
+    }
+
+    /* Publish Object Temperature Sensor Discovery */
+    cJSON *object_config = cJSON_CreateObject();
+    if (object_config) {
+        cJSON_AddStringToObject(object_config, "name", "Object Temperature");
+        cJSON_AddStringToObject(object_config, "unique_id", "pawsaver_object_temp");
+        cJSON_AddStringToObject(object_config, "state_topic", CONFIG_PAWSAVER_MQTT_TOPIC);
+        cJSON_AddStringToObject(object_config, "unit_of_measurement", "°C");
+        cJSON_AddStringToObject(object_config, "value_template", "{{ value_json.object }}");
+        cJSON_AddStringToObject(object_config, "device_class", "temperature");
+        cJSON_AddItemToObject(object_config, "device", cJSON_Duplicate(device, 1));
+        
+        char *object_payload = cJSON_PrintUnformatted(object_config);
+        cJSON_Delete(object_config);
+        
+        if (object_payload) {
+            esp_mqtt_client_publish(mqtt_client,
+                                    "homeassistant/sensor/pawsaver/object_temperature/config",
+                                    object_payload, 0, 1, 1);
+            ESP_LOGI(TAG, "Published object temp discovery");
+            free(object_payload);
+        }
+    }
+
+    /* Publish Battery Voltage Sensor Discovery */
+    cJSON *battery_config = cJSON_CreateObject();
+    if (battery_config) {
+        cJSON_AddStringToObject(battery_config, "name", "Battery Voltage");
+        cJSON_AddStringToObject(battery_config, "unique_id", "pawsaver_battery");
+        cJSON_AddStringToObject(battery_config, "state_topic", CONFIG_PAWSAVER_MQTT_TOPIC);
+        cJSON_AddStringToObject(battery_config, "unit_of_measurement", "V");
+        cJSON_AddStringToObject(battery_config, "value_template", "{{ value_json.battery }}");
+        cJSON_AddStringToObject(battery_config, "device_class", "voltage");
+        cJSON_AddItemToObject(battery_config, "device", cJSON_Duplicate(device, 1));
+        
+        char *battery_payload = cJSON_PrintUnformatted(battery_config);
+        cJSON_Delete(battery_config);
+        
+        if (battery_payload) {
+            esp_mqtt_client_publish(mqtt_client,
+                                    "homeassistant/sensor/pawsaver/battery_voltage/config",
+                                    battery_payload, 0, 1, 1);
+            ESP_LOGI(TAG, "Published battery discovery");
+            free(battery_payload);
+        }
+    }
+
+    cJSON_Delete(device);
+    
+    ESP_LOGI(TAG, "All discovery messages published");
+    return ESP_OK;
+}

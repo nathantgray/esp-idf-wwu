@@ -164,6 +164,8 @@ void pawsaver_mqtt_deinit(void);
  */
 // const char* pawsaver_get_wakeup_reason_str(void);
 
+esp_err_t publish_device_discovery(void);
+
 #ifdef __cplusplus
 }
 #endif
