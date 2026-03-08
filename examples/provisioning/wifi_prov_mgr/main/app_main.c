@@ -696,7 +696,7 @@ void app_main(void)
         if (err == ESP_OK) {
             battery_voltage_read = adc_raw[0][0];
             // Example conversion from raw ADC to voltage (assuming 12-bit ADC and 3.3V reference)
-            sensor_data.battery_voltage = (battery_voltage_read / 4095.0f) * 3.3f;
+            sensor_data.battery_voltage = (battery_voltage_read / 4095.0f) * 3.3f* 1.487;
         } else {
             ESP_LOGE(TAG, "Failed to read battery voltage from ADC");
             sensor_data.battery_voltage = 0.0f; // Set to 0 or a sentinel value on failure
