@@ -24,7 +24,7 @@ const static char *TAG = "EXAMPLE";
 #define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_4
 #define EXAMPLE_ADC1_CHAN1          ADC_CHANNEL_5
 #else
-#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2
+#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2 //battery channel for A2
 #define EXAMPLE_ADC1_CHAN1          ADC_CHANNEL_3
 #endif
 

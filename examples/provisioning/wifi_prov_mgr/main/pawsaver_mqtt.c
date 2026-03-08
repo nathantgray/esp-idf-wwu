@@ -150,9 +150,9 @@ esp_err_t pawsaver_mqtt_publish(const pawsaver_data_t *data)
     }
 
     cJSON_AddNumberToObject(root, "timestamp", (double)data->timestamp);
-    cJSON_AddNumberToObject(root, "ambient", data->ambient_temp);
-    cJSON_AddNumberToObject(root, "object", data->object_temp);
-    cJSON_AddNumberToObject(root, "battery", data->battery_voltage);
+    cJSON_AddNumberToObject(root, "ambient", (double)data->ambient_temp);
+    cJSON_AddNumberToObject(root, "object", (double)data->object_temp);
+    cJSON_AddNumberToObject(root, "battery", (double)data->battery_voltage);
     cJSON_AddNumberToObject(root, "mode", data->mode);
 
     char *payload = cJSON_PrintUnformatted(root);

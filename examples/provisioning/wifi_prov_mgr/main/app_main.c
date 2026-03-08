@@ -24,6 +24,13 @@
 
 #include <nvs_flash.h>
 
+//ADC oneshot read
+#include <stdlib.h>
+#include "soc/soc_caps.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
+
 
 #include <wifi_provisioning/manager.h>
 
@@ -120,13 +127,16 @@ static volatile bool button_pressed = false;
 #define PROV_TRANSPORT_BLE      "ble"
 #define QRCODE_BASE_URL         "https://espressif.github.io/esp-jumpstart/qrcode.html"
 
-//Sleep definitions
+//Sleep definitions - Use definitions from pawsaver.h
 #define mS_TO_S_FACTOR 1000ULL  /* Conversion factor for milli seconds to seconds */
 #define uS_TO_S_FACTOR 1000000ULL  /* Conversion factor for micro seconds to seconds */
-#define TIME_TO_SLEEP_DEBUG  10        /* Time ESP32 will go to sleep (in seconds) */
-#define TIME_TO_SLEEP_SHORT  60        /* Time ESP32 will go to sleep (in seconds) */
-#define TIME_TO_SLEEP_LONG  300        /* Time ESP32 will go to sleep (in seconds) */
-#define TIME_TO_SLEEP_DEAD  3600        /* Time ESP32 will go to sleep (in seconds) */
+
+//ADC oneshot read definitions
+#define EXAMPLE_ADC1_CHAN0          ADC_CHANNEL_2 //battery channel for A2
+#define EXAMPLE_ADC1_CHAN1          ADC_CHANNEL_3 //second ADC channel (ADC1 only on ESP32-C6)
+#define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_12
+static int adc_raw[2][10];
+float battery_voltage_read = 0.00f;
 
  /* Event handler for catching system events */
 static void event_handler(void* arg, esp_event_base_t event_base,
@@ -572,6 +582,10 @@ void app_main(void)
         xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
     }
 #else
+
+
+
+
     // Define GPIO pins
     #define GPIO_OUTPUT_PIN      GPIO_NUM_14  // GPIO for powering device
     #define GPIO_WAKEUP_PIN      GPIO_NUM_1   // GPIO for wakeup button
@@ -615,6 +629,25 @@ void app_main(void)
     
     ESP_LOGI(TAG, "Sleep enabled. Wake sources: timer (%d sec) and GPIO%d (button press)", time_to_sleep, GPIO_WAKEUP_PIN);
 
+    //Oneshot ADC read setup
+    //-------------ADC1 Second Channel Init---------------//
+    // Note: ESP32-C6 only has ADC1, no ADC2
+    adc_oneshot_unit_handle_t adc1_handle;
+    adc_oneshot_unit_init_cfg_t init_config1 = {
+        .unit_id = ADC_UNIT_1,
+        .ulp_mode = ADC_ULP_MODE_DISABLE,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config1, &adc1_handle));
+
+    //-------------ADC1 Config for both channels---------------//
+    adc_oneshot_chan_cfg_t adc_config = {
+        .bitwidth = ADC_BITWIDTH_DEFAULT,
+        .atten = EXAMPLE_ADC_ATTEN,
+    };
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_config));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN1, &adc_config));
+    
+
     while (1) {
         // Check if button was pressed
         if (button_pressed) {
@@ -647,15 +680,28 @@ void app_main(void)
             }
             // sensor_data.battery_voltage = pawsaver_battery_read();
             sensor_data.mode = PAWSAVER_MODE_DEBUG;
+            battery_voltage_read = adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]);
         } else {
             ESP_LOGW(TAG, "GY-906 not available, using debug data");
             sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
             sensor_data.ambient_temp = -999.0f;  /* Sentinel value indicating no sensor */
             sensor_data.object_temp = -999.0f;
-            // sensor_data.battery_voltage = pawsaver_battery_read();
+            sensor_data.battery_voltage = 0.0f; // Convert raw ADC to voltage (example conversion)
             sensor_data.mode = PAWSAVER_MODE_DEBUG;
             ESP_LOGI(TAG, "Using debug data: battery=%.2fV", sensor_data.battery_voltage);
         }
+        
+        // Read battery voltage from ADC1 Channel 0
+        esp_err_t err = adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]);
+        if (err == ESP_OK) {
+            battery_voltage_read = adc_raw[0][0];
+            // Example conversion from raw ADC to voltage (assuming 12-bit ADC and 3.3V reference)
+            sensor_data.battery_voltage = (battery_voltage_read / 4095.0f) * 3.3f;
+        } else {
+            ESP_LOGE(TAG, "Failed to read battery voltage from ADC");
+            sensor_data.battery_voltage = 0.0f; // Set to 0 or a sentinel value on failure
+        }
+        
         /* Initialize MQTT */
         ESP_ERROR_CHECK(pawsaver_mqtt_init());
 
@@ -679,6 +725,11 @@ void app_main(void)
             gy906_deinit();
         }
         ESP_LOGI(TAG, "Hello World!");
+        
+        // Read from ADC1 Channel 0 (battery channel)
+        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
+        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
+                
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
         if ((esp_timer_get_time() / 1000ULL) - wakeTime > on_interval) 
