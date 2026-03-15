@@ -396,6 +396,9 @@ static int get_on_interval_for_mode(pawsaver_mode_t mode)
     }
 }
 
+static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
+static void example_adc_calibration_deinit(adc_cali_handle_t handle);
+
 /* GPIO interrupt handler for button press */
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -712,6 +715,14 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_config));
     ESP_ERROR_CHECK(adc_oneshot_config_channel(adc1_handle, EXAMPLE_ADC1_CHAN1, &adc_config));
+    //-------------ADC1 Calibration Init---------------//
+    adc_cali_handle_t adc1_cali_chan0_handle = NULL;
+    adc_cali_handle_t adc1_cali_chan1_handle = NULL;
+    bool do_calibration1_chan0 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN0, EXAMPLE_ADC_ATTEN, &adc1_cali_chan0_handle);
+    bool do_calibration1_chan1 = example_adc_calibration_init(ADC_UNIT_1, EXAMPLE_ADC1_CHAN1, EXAMPLE_ADC_ATTEN, &adc1_cali_chan1_handle);
+    (void)do_calibration1_chan0;
+    (void)do_calibration1_chan1;
+
     
 
     while (1) {
@@ -758,9 +769,12 @@ void app_main(void)
         // Read battery voltage from ADC1 Channel 0
         esp_err_t err = adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]);
         if (err == ESP_OK) {
-            battery_voltage_read = adc_raw[0][0];
-            // Example conversion from raw ADC to voltage (assuming 12-bit ADC and 3.3V reference)
-            sensor_data.battery_voltage = (battery_voltage_read / 4095.0f) * 3.3f* 1.487;
+            if (do_calibration1_chan0) {
+                int calibrated_voltage_mv = 0;
+                ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &calibrated_voltage_mv));
+                battery_voltage_read = calibrated_voltage_mv / 1000.0f;
+                sensor_data.battery_voltage = battery_voltage_read * 1.487f;
+            }
         } else {
             ESP_LOGE(TAG, "Failed to read battery voltage from ADC");
             sensor_data.battery_voltage = 0.0f; // Set to 0 or a sentinel value on failure
@@ -819,10 +833,79 @@ void app_main(void)
             int sleep_secs = get_sleep_time_for_mode(current_mode);
             ESP_LOGI(TAG, "Entering deep sleep for %d s (mode %d, battery %.2fV)",
                      sleep_secs, (int)current_mode, sensor_data.battery_voltage);
+            if (adc1_cali_chan0_handle != NULL) {
+                example_adc_calibration_deinit(adc1_cali_chan0_handle);
+                adc1_cali_chan0_handle = NULL;
+            }
+            if (adc1_cali_chan1_handle != NULL) {
+                example_adc_calibration_deinit(adc1_cali_chan1_handle);
+                adc1_cali_chan1_handle = NULL;
+            }
             esp_sleep_enable_timer_wakeup((uint64_t)sleep_secs * uS_TO_S_FACTOR);
             esp_deep_sleep_start();
         }
      }
 #endif
 
+}
+
+static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle)
+{
+    adc_cali_handle_t handle = NULL;
+    esp_err_t ret = ESP_FAIL;
+    bool calibrated = false;
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Curve Fitting");
+        adc_cali_curve_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .chan = channel,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_curve_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+#if ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    if (!calibrated) {
+        ESP_LOGI(TAG, "calibration scheme version is %s", "Line Fitting");
+        adc_cali_line_fitting_config_t cali_config = {
+            .unit_id = unit,
+            .atten = atten,
+            .bitwidth = ADC_BITWIDTH_DEFAULT,
+        };
+        ret = adc_cali_create_scheme_line_fitting(&cali_config, &handle);
+        if (ret == ESP_OK) {
+            calibrated = true;
+        }
+    }
+#endif
+
+    *out_handle = handle;
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Calibration Success");
+    } else if (ret == ESP_ERR_NOT_SUPPORTED || !calibrated) {
+        ESP_LOGW(TAG, "eFuse not burnt, skip software calibration");
+    } else {
+        ESP_LOGE(TAG, "Invalid arg or no memory");
+    }
+
+    return calibrated;
+}
+
+static void example_adc_calibration_deinit(adc_cali_handle_t handle)
+{
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Curve Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_curve_fitting(handle));
+
+#elif ADC_CALI_SCHEME_LINE_FITTING_SUPPORTED
+    ESP_LOGI(TAG, "deregister %s calibration scheme", "Line Fitting");
+    ESP_ERROR_CHECK(adc_cali_delete_scheme_line_fitting(handle));
+#endif
 }
