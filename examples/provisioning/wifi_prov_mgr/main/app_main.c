@@ -31,6 +31,12 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
+// USB Serial/JTAG connection detection (ESP32-C6 built-in USB)
+#include "hal/usb_serial_jtag_ll.h"
+
+// mDNS for resolving .local hostnames (e.g. homeassistant.local)
+#include "mdns.h"
+
 
 #include <wifi_provisioning/manager.h>
 
@@ -335,6 +341,61 @@ const wifi_prov_event_handler_t wifi_prov_event_handler = {
 };
 #endif /* EXAMPLE_PROV_ENABLE_APP_CALLBACK */
 
+/* ─────────────────────────────────────────────────────────────
+ * Battery Mode Helpers
+ * ───────────────────────────────────────────────────────────── */
+
+/**
+ * @brief Returns true when a USB host (computer) has the serial port open.
+ *        Uses the ESP32-C6 built-in USB Serial/JTAG TX-FIFO-writable flag,
+ *        which is set by hardware whenever a host has the CDC port open.
+ */
+static bool is_usb_host_connected(void)
+{
+    return usb_serial_jtag_ll_txfifo_writable() != 0;
+}
+
+/** Determine operating mode from USB connection status and battery voltage. */
+static pawsaver_mode_t determine_battery_mode(float v_batt)
+{
+    /* USB connected to a computer → always debug, regardless of voltage */
+    if (is_usb_host_connected()) {
+        return PAWSAVER_MODE_DEBUG;
+    }
+    if (v_batt >= BATTERY_PLUGGED_IN) {
+        return PAWSAVER_MODE_DEBUG;       /* Charging via USB without host port open */
+    } else if (v_batt < BATTERY_MIN_VOLTAGE) {
+        return PAWSAVER_MODE_DEAD;        /* Critically low – conserve everything */
+    } else if (v_batt < BATTERY_LOW_VOLTAGE) {
+        return PAWSAVER_MODE_LOW_POWER;   /* Low – reduce reporting frequency */
+    }
+    return PAWSAVER_MODE_NORMAL;          /* Healthy charge level */
+}
+
+/** Sleep duration (seconds) for each battery mode. */
+static int get_sleep_time_for_mode(pawsaver_mode_t mode)
+{
+    switch (mode) {
+        case PAWSAVER_MODE_DEBUG:     return TIME_TO_SLEEP_DEBUG;  /*    5 s */
+        case PAWSAVER_MODE_DEAD:      return TIME_TO_SLEEP_DEAD;   /* 3600 s */
+        case PAWSAVER_MODE_LOW_POWER: return TIME_TO_SLEEP_LONG;   /*  300 s */
+        case PAWSAVER_MODE_NORMAL:
+        default:                      return TIME_TO_SLEEP_SHORT;  /*   60 s */
+    }
+}
+
+/** Active on-interval (ms) – how long to stay awake per mode. */
+static int get_on_interval_for_mode(pawsaver_mode_t mode)
+{
+    switch (mode) {
+        case PAWSAVER_MODE_DEBUG:     return 10000;  /* 60 s – plugged in, verbose */
+        case PAWSAVER_MODE_DEAD:      return 10000;  /* 10 s – minimal work */
+        case PAWSAVER_MODE_LOW_POWER: return 20000;  /* 20 s – conserve power */
+        case PAWSAVER_MODE_NORMAL:
+        default:                      return 20000;  /* 20 s – standard */
+    }
+}
+
 /* GPIO interrupt handler for button press */
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -567,6 +628,9 @@ void app_main(void)
     /* Wait for Wi-Fi connection */
     xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
 
+    /* Initialize mDNS so .local hostnames (e.g. homeassistant.local) can be resolved */
+    ESP_ERROR_CHECK(mdns_init());
+
     /* Start main application now */
 #if CONFIG_EXAMPLE_REPROVISIONING
     while (1) {
@@ -618,16 +682,18 @@ void app_main(void)
     
     unsigned long wakeTime;
     wakeTime = esp_timer_get_time() / 1000ULL; // Convert to milliseconds
-    int on_interval = 10000;  // 10 seconds in milliseconds
-    int time_to_sleep = TIME_TO_SLEEP_DEBUG;
-    
-    // Configure timer wakeup
-    esp_sleep_enable_timer_wakeup(time_to_sleep * uS_TO_S_FACTOR);
+
+    /* Battery mode tracks state across loop iterations */
+    pawsaver_mode_t current_mode = PAWSAVER_MODE_NORMAL;
+    int on_interval = get_on_interval_for_mode(current_mode);
+
+    /* Configure initial timer wakeup; reconfigured each sleep based on mode */
+    esp_sleep_enable_timer_wakeup((uint64_t)get_sleep_time_for_mode(current_mode) * uS_TO_S_FACTOR);
     
     // Configure GPIO wakeup - wake on LOW (button pressed pulls pin to ground)
     esp_deep_sleep_enable_gpio_wakeup((1ULL << GPIO_WAKEUP_PIN), ESP_GPIO_WAKEUP_GPIO_LOW);
     
-    ESP_LOGI(TAG, "Sleep enabled. Wake sources: timer (%d sec) and GPIO%d (button press)", time_to_sleep, GPIO_WAKEUP_PIN);
+    ESP_LOGI(TAG, "Sleep enabled. Wake sources: timer (%d sec) and GPIO%d (button press)", get_sleep_time_for_mode(current_mode), GPIO_WAKEUP_PIN);
 
     //Oneshot ADC read setup
     //-------------ADC1 Second Channel Init---------------//
@@ -679,15 +745,13 @@ void app_main(void)
                 sensor_data.object_temp = -999.0f;
             }
             // sensor_data.battery_voltage = pawsaver_battery_read();
-            sensor_data.mode = PAWSAVER_MODE_DEBUG;
-            battery_voltage_read = adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]);
+            /* mode and battery_voltage set after ADC read below */
         } else {
             ESP_LOGW(TAG, "GY-906 not available, using debug data");
             sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
             sensor_data.ambient_temp = -999.0f;  /* Sentinel value indicating no sensor */
             sensor_data.object_temp = -999.0f;
-            sensor_data.battery_voltage = 0.0f; // Convert raw ADC to voltage (example conversion)
-            sensor_data.mode = PAWSAVER_MODE_DEBUG;
+            sensor_data.battery_voltage = 0.0f; // will be updated by ADC read below
             ESP_LOGI(TAG, "Using debug data: battery=%.2fV", sensor_data.battery_voltage);
         }
         
@@ -701,39 +765,61 @@ void app_main(void)
             ESP_LOGE(TAG, "Failed to read battery voltage from ADC");
             sensor_data.battery_voltage = 0.0f; // Set to 0 or a sentinel value on failure
         }
-        
-        /* Initialize MQTT */
-        ESP_ERROR_CHECK(pawsaver_mqtt_init());
 
-        /* Wait for MQTT connection */
-        if (!pawsaver_mqtt_wait_connected(10000)) {
-            ESP_LOGE(TAG, "MQTT connection timeout");
-        } else {
+        /* Determine battery mode from measured voltage and update intervals */
+        pawsaver_mode_t new_mode = determine_battery_mode(sensor_data.battery_voltage);
+        if (new_mode != current_mode) {
+            ESP_LOGI(TAG, "Battery mode changed: %d -> %d (%.2fV)",
+                     (int)current_mode, (int)new_mode, sensor_data.battery_voltage);
+            current_mode = new_mode;
+            on_interval = get_on_interval_for_mode(current_mode);
+        }
+        sensor_data.mode = current_mode;
+        ESP_LOGI(TAG, "Battery: %.2fV | Mode: %d | On-interval: %dms",
+                 sensor_data.battery_voltage, (int)current_mode, on_interval);
+        
+        bool mqtt_connected = false;
+        for (int mqtt_attempt = 1; mqtt_attempt <= 2 && !mqtt_connected; mqtt_attempt++) {
+            if (mqtt_attempt > 1) {
+                ESP_LOGW(TAG, "Retrying MQTT connection (attempt %d/2)", mqtt_attempt);
+                vTaskDelay(pdMS_TO_TICKS(3000));
+            }
+
+            /* Initialize MQTT */
+            ESP_ERROR_CHECK(pawsaver_mqtt_init());
+
+            /* Wait for MQTT connection */
+            if (!pawsaver_mqtt_wait_connected(10000)) {
+                ESP_LOGE(TAG, "MQTT connection timeout (attempt %d/2)", mqtt_attempt);
+                pawsaver_mqtt_deinit();
+                continue;
+            }
+
             /* Publish device discovery first */
             ESP_ERROR_CHECK(publish_device_discovery());
-            
+
             /* Publish sensor data */
             pawsaver_mqtt_publish(&sensor_data);
 
             /* Wait for message to be sent */
             vTaskDelay(pdMS_TO_TICKS(1000));
-        }
 
-        /* Cleanup */
-        pawsaver_mqtt_deinit();
+            mqtt_connected = true;
+            pawsaver_mqtt_deinit();
+        }
         if (sensor_available) {
             gy906_deinit();
         }
         ESP_LOGI(TAG, "Hello World!");
-        
-        // Read from ADC1 Channel 0 (battery channel)
-        ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, EXAMPLE_ADC1_CHAN0, &adc_raw[0][0]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1 + 1, EXAMPLE_ADC1_CHAN0, adc_raw[0][0]);
-                
+
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-        if ((esp_timer_get_time() / 1000ULL) - wakeTime > on_interval) 
-        {   
+        if ((esp_timer_get_time() / 1000ULL) - wakeTime > on_interval)
+        {
+            int sleep_secs = get_sleep_time_for_mode(current_mode);
+            ESP_LOGI(TAG, "Entering deep sleep for %d s (mode %d, battery %.2fV)",
+                     sleep_secs, (int)current_mode, sensor_data.battery_voltage);
+            esp_sleep_enable_timer_wakeup((uint64_t)sleep_secs * uS_TO_S_FACTOR);
             esp_deep_sleep_start();
         }
      }
