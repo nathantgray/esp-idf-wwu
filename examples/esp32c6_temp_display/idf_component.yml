@@ -1,0 +1,8 @@
+## IDF Component Manager Manifest File for Temperature Display
+
+dependencies:
+  ## Required IDF version
+  idf:
+    version: '>=4.4.0'
+  ## NeoPixel library for LED control
+  zorxx/neopixel: '*'
