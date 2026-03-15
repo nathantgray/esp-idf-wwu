@@ -1,0 +1,4 @@
+## IDF Component manifest for the main application component
+
+dependencies:
+  zorxx/neopixel: "*"
