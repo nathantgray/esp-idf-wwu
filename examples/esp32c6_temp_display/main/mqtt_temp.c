@@ -54,6 +54,13 @@ static float parse_temperature(const char *payload, int payload_len) {
         if (temp_value == NULL) {
             temp_value = cJSON_GetObjectItem(json, "state");
         }
+        /* IR sensor formats */
+        if (temp_value == NULL) {
+            temp_value = cJSON_GetObjectItem(json, "object");
+        }
+        if (temp_value == NULL) {
+            temp_value = cJSON_GetObjectItem(json, "ambient");
+        }
 
         if (temp_value != NULL && temp_value->type == cJSON_Number) {
             float result = (float)temp_value->valuedouble;

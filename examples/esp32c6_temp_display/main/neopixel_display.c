@@ -28,14 +28,14 @@ static portMUX_TYPE neopixel_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* 7-segment patterns (bit 0-6 = segments a-g) */
 const uint8_t digitPatterns[10] = {
-    0b0111111, /* 0 = a,b,c,d,e,f */
-    0b0000110, /* 1 = b,c */
-    0b1011011, /* 2 = a,b,d,e,g */
-    0b1001111, /* 3 = a,b,c,d,g */
-    0b1100110, /* 4 = b,c,f,g */
+    0b1111110, /* 0 = a,b,c,d,e,f */
+    0b1000010, /* 1 = b,c */
+    0b0110111, /* 2 = a,b,d,e,g */
+    0b1100111, /* 3 = a,b,c,d,g */
+    0b1001011, /* 4 = b,c,f,g */
     0b1101101, /* 5 = a,c,d,f,g */
     0b1111101, /* 6 = a,c,d,e,f,g */
-    0b0000111, /* 7 = a,b,c */
+    0b1000110, /* 7 = a,b,c */
     0b1111111, /* 8 = a,b,c,d,e,f,g */
     0b1101111  /* 9 = a,b,c,d,f,g */
 };
