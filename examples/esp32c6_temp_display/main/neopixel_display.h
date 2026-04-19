@@ -3,6 +3,7 @@
  *
  * Temperature Display - NeoPixel 7-Segment Display Driver
  * Controls a 3x 7-segment NeoPixel display with temperature-based color coding
+ * Displays temperature values in Fahrenheit with dynamic color transitions
  */
 
 #pragma once
@@ -22,12 +23,12 @@ extern "C" {
 #define LEDS_PER_DIGIT (LEDS_PER_SEGMENT * SEGMENTS_PER_DIGIT)
 #define TOTAL_LEDS (NUM_DIGITS * LEDS_PER_DIGIT)
 
-/* Temperature thresholds for color transitions (in Celsius) */
-#define TEMP_COLD_MIN -20.0f      /* Coldest temperature (pure green) */
-#define TEMP_COOL 5.0f            /* Cool threshold */
-#define TEMP_WARM 20.0f           /* Warm threshold */
-#define TEMP_HOT 35.0f            /* Hot threshold */
-#define TEMP_HOT_MAX 50.0f        /* Hottest temperature (pure red) */
+/* Temperature thresholds for color transitions (in Fahrenheit) */
+#define TEMP_COLD_MIN 32.0f       /* Coldest temperature - freezing (pure green) */
+#define TEMP_COOL 50.0f           /* Cool threshold */
+#define TEMP_WARM 70.0f           /* Warm threshold - comfortable room temp */
+#define TEMP_HOT 85.0f            /* Hot threshold */
+#define TEMP_HOT_MAX 100.0f       /* Hottest temperature (pure red) */
 
 /**
  * @brief Initialize the NeoPixel display
@@ -45,15 +46,15 @@ void neopixel_display_deinit(void);
 /**
  * @brief Display a temperature value on the 3-digit 7-segment display
  *
- * The color changes based on temperature:
- * - Below -20°C: Pure green
- * - -20°C to 5°C: Green to cyan
- * - 5°C to 20°C: Cyan to yellow
- * - 20°C to 35°C: Yellow to orange
- * - 35°C to 50°C: Orange to red
- * - Above 50°C: Pure red
+ * The color changes based on temperature (Fahrenheit):
+ * - Below 32°F: Pure green (freezing)
+ * - 32°F to 50°F: Green to cyan (cold)
+ * - 50°F to 70°F: Cyan to yellow (cool to comfortable)
+ * - 70°F to 85°F: Yellow to orange (warm)
+ * - 85°F to 100°F: Orange to red (hot)
+ * - Above 100°F: Pure red (very hot)
  *
- * @param temperature Temperature value in Celsius (-99.9 to 99.9)
+ * @param temperature Temperature value in Fahrenheit (-99.9 to 99.9°F)
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t neopixel_display_temperature(float temperature);
@@ -82,6 +83,20 @@ esp_err_t neopixel_display_clear(void);
  * @return ESP_OK on success, error code otherwise
  */
 esp_err_t neopixel_display_set_brightness(uint8_t brightness);
+
+/**
+ * @brief Display provisioning mode indicator (blinking blue)
+ *
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t neopixel_display_provisioning(void);
+
+/**
+ * @brief Display provisioning success pattern (green then clear)
+ *
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t neopixel_display_provisioning_success(void);
 
 #ifdef __cplusplus
 }

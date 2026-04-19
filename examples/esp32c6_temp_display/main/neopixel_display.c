@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Temperature Display - NeoPixel 7-Segment Display Driver Implementation
+ * Displays temperature values in Fahrenheit with color-coded temperature ranges
  */
 
 #include <stdio.h>
@@ -99,12 +100,12 @@ void neopixel_display_deinit(void) {
 }
 
 void neopixel_get_color_for_temp(float temperature, uint8_t *r, uint8_t *g, uint8_t *b) {
-    /* Color mapping:
-       Cold (-20°C): Green (0, 255, 0)
-       Cool (5°C): Cyan (0, 255, 255)
-       Warm (20°C): Yellow (255, 255, 0)
-       Hot (35°C): Orange (255, 165, 0)
-       Hotter (50°C): Red (255, 0, 0)
+    /* Color mapping (Fahrenheit scale):
+       Cold (32°F): Green (0, 255, 0)
+       Cool (50°F): Cyan (0, 255, 255)
+       Comfortable (70°F): Yellow (255, 255, 0)
+       Hot (85°F): Orange (255, 165, 0)
+       Very Hot (100°F): Red (255, 0, 0)
     */
     
     if (temperature <= TEMP_COLD_MIN) {
@@ -152,7 +153,7 @@ esp_err_t neopixel_display_temperature(float temperature) {
 
     /* Clamp temperature for display purposes */
     float displayTemp = temperature;
-    if (displayTemp > 99.9f) displayTemp = 99.9f;
+    if (displayTemp > 999.9f) displayTemp = 999.9f;
     if (displayTemp < -99.9f) displayTemp = -99.9f;
 
     /* Get color for current temperature */
@@ -188,6 +189,11 @@ esp_err_t neopixel_display_temperature(float temperature) {
             if (digit_idx == 0) digit_value = hundreds;
             else if (digit_idx == 1) digit_value = tens;
             else digit_value = ones;
+        }
+        
+        /* Skip first digit if it's zero (leading zero suppression) */
+        if (digit_idx == 0 && digit_value == 0) {
+            continue;
         }
         
         /* Get 7-segment pattern for this digit */
@@ -240,5 +246,57 @@ esp_err_t neopixel_display_set_brightness(uint8_t new_brightness) {
     portEXIT_CRITICAL(&neopixel_mux);
     
     ESP_LOGI(TAG, "Brightness set to %d", new_brightness);
+    return ESP_OK;
+}
+
+esp_err_t neopixel_display_provisioning(void) {
+    /* Display all segments in cyan (RGB mode for provisioning indicator) */
+    if (neopixel_ctx == NULL) {
+        ESP_LOGE(TAG, "Display not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int total_pixels = TOTAL_LEDS;
+    tNeopixel pixels[total_pixels];
+    
+    /* Fill all pixels with cyan (blue + green) */
+    uint32_t cyan = applyBrightness(0, 255, 255);
+    
+    for (int i = 0; i < total_pixels; i++) {
+        pixels[i].index = i;
+        pixels[i].rgb = cyan;
+    }
+    
+    if (!neopixel_SetPixel(neopixel_ctx, pixels, total_pixels)) {
+        ESP_LOGE(TAG, "Failed to set provisioning indicator");
+        return ESP_FAIL;
+    }
+    
+    return ESP_OK;
+}
+
+esp_err_t neopixel_display_provisioning_success(void) {
+    /* Display all segments in green */
+    if (neopixel_ctx == NULL) {
+        ESP_LOGE(TAG, "Display not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    int total_pixels = TOTAL_LEDS;
+    tNeopixel pixels[total_pixels];
+    
+    /* Fill all pixels with green */
+    uint32_t green = applyBrightness(0, 255, 0);
+    
+    for (int i = 0; i < total_pixels; i++) {
+        pixels[i].index = i;
+        pixels[i].rgb = green;
+    }
+    
+    if (!neopixel_SetPixel(neopixel_ctx, pixels, total_pixels)) {
+        ESP_LOGE(TAG, "Failed to set provisioning success indicator");
+        return ESP_FAIL;
+    }
+    
     return ESP_OK;
 }
