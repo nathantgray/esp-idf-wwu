@@ -22,6 +22,12 @@
 #include <wifi_provisioning/manager.h>
 #include <wifi_provisioning/scheme_softap.h>
 #include <driver/gpio.h>
+#include <wifi_provisioning/scheme_ble.h>
+
+
+#ifdef CONFIG_EXAMPLE_PROV_SHOW_QR
+#include "qrcode.h"
+#endif
 
 #include "neopixel_display.h"
 #include "mqtt_temp.h"
@@ -198,6 +204,12 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 }
 
 /* ============================================================================
+ * Forward Declarations
+ * ============================================================================ */
+
+static void wifi_prov_print_qr(const char *name, const char *username, const char *pop, const char *transport);
+
+/* ============================================================================
  * Reprovisioning Button Handler
  * ============================================================================ */
 
@@ -286,7 +298,13 @@ static esp_err_t trigger_reprovisioning(void) {
     ESP_LOGI(TAG, "Reprovisioning started");
     ESP_LOGI(TAG, "Service Name: %s", service_name);
     ESP_LOGI(TAG, "PoP (Proof of Possession): %s", pop);
-    ESP_LOGI(TAG, "Scan the QR code with your phone to re-provision the device");
+    
+    /* Print QR code for reprovisioning */
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+    wifi_prov_print_qr(service_name, NULL, pop, PROV_TRANSPORT_BLE);
+#else /* CONFIG_EXAMPLE_PROV_TRANSPORT_SOFTAP */
+    wifi_prov_print_qr(service_name, NULL, pop, PROV_TRANSPORT_SOFTAP);
+#endif /* CONFIG_EXAMPLE_PROV_TRANSPORT_BLE */
     
     return ESP_OK;
 }
@@ -297,46 +315,62 @@ static esp_err_t trigger_reprovisioning(void) {
 static void button_task(void *arg) {
     ESP_LOGI(TAG, "Button task started - monitoring GPIO %d for reprovisioning", REPROV_BUTTON_GPIO);
     
-    uint8_t last_state = 1;  /* Button is normally high (pull-up enabled) */
-    uint32_t press_duration = 0;
+    /* Wait for button to stabilize in released state (high) before starting to monitor */
+    uint32_t stable_count = 0;
+    while (stable_count < 10) {
+        uint8_t state = gpio_get_level(REPROV_BUTTON_GPIO);
+        if (state == 1) {
+            stable_count++;
+        } else {
+            stable_count = 0;
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+    ESP_LOGI(TAG, "Button ready for monitoring");
     
-    while (1) {
-        uint8_t current_state = gpio_get_level(REPROV_BUTTON_GPIO);
-        
-        if (current_state == 0 && last_state == 1) {
-            /* Button pressed (falling edge) */
+uint8_t prev_state = 1;
+uint8_t last_stable_state = 1;
+uint32_t press_duration = 0;
+uint32_t debounce_count = 0;
+
+while (1) {
+    uint8_t current_state = gpio_get_level(REPROV_BUTTON_GPIO);
+
+    if (current_state == prev_state) {
+        debounce_count++;
+    } else {
+        debounce_count = 0;
+    }
+    prev_state = current_state;
+
+    if (debounce_count >= 5) {
+        if (current_state == 0 && last_stable_state == 1) {
+            /* Falling edge — button just pressed */
             ESP_LOGI(TAG, "Button pressed");
             press_duration = 0;
-        } else if (current_state == 0 && last_state == 0) {
-            /* Button still held down */
+            last_stable_state = 0;
+        } else if (current_state == 0 && last_stable_state == 0) {
+            /* Still held down */
             press_duration++;
-            
-            /* Trigger reprovisioning after button held for ~1 second (10 * 100ms) */
-            if (press_duration == 10) {
+            if (press_duration == 50) { /* 50 * 20ms = 1 second */
                 ESP_LOGI(TAG, "Button held for 1 second - initiating reprovisioning");
-                //trigger_reprovisioning();
-                ESP_LOGI(TAG, "Button pressed! Resetting provisioning to connect to new WiFi...");
-            
-                // Disconnect WiFi and reset provisioning
                 esp_wifi_disconnect();
                 wifi_prov_mgr_reset_provisioning();
-            
                 ESP_LOGI(TAG, "Restarting device for new WiFi provisioning...");
-                vTaskDelay(1000 / portTICK_PERIOD_MS);
+                vTaskDelay(pdMS_TO_TICKS(1000));
                 esp_restart();
-                    
             }
-        } else if (current_state == 1 && last_state == 0) {
-            /* Button released (rising edge) */
+        } else if (current_state == 1 && last_stable_state == 0) {
+            /* Rising edge — button released */
             ESP_LOGI(TAG, "Button released after %lu iterations", press_duration);
             press_duration = 0;
+            last_stable_state = 1;
         }
-        
-        last_state = current_state;
-        vTaskDelay(pdMS_TO_TICKS(100));
     }
-}
 
+    vTaskDelay(pdMS_TO_TICKS(20));
+}
+}
 /* ============================================================================
  * WiFi Provisioning Setup
  * ============================================================================ */
@@ -344,6 +378,25 @@ static void button_task(void *arg) {
 /**
  * @brief Initialize WiFi provisioning manager
  */
+
+static void wifi_prov_print_qr(const char *name, const char *username, const char *pop, const char *transport)
+{
+    if (!name || !transport) {
+        ESP_LOGW(TAG, "Cannot generate QR code payload. Data missing.");
+        return;
+    }
+    char payload[150] = {0};
+    if (pop) {
+        snprintf(payload, sizeof(payload), "{\"ver\":\"%s\",\"name\":\"%s\",\"pop\":\"%s\",\"transport\":\"%s\"}",
+                 PROV_QR_VERSION, name, pop, transport);
+    } else {
+        snprintf(payload, sizeof(payload), "{\"ver\":\"%s\",\"name\":\"%s\",\"transport\":\"%s\"}",
+                 PROV_QR_VERSION, name, transport);
+    }
+    ESP_LOGI(TAG, "Provisioning URL: %s?data=%s", QRCODE_BASE_URL, payload);
+}
+
+
 static esp_err_t wifi_prov_setup(void) {
     ESP_LOGI(TAG, "Starting WiFi provisioning setup");
 
@@ -355,6 +408,10 @@ static esp_err_t wifi_prov_setup(void) {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &event_handler, NULL));
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+    ESP_ERROR_CHECK(esp_event_handler_register(PROTOCOMM_TRANSPORT_BLE_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
+#endif
+    ESP_ERROR_CHECK(esp_event_handler_register(PROTOCOMM_SECURITY_SESSION_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
 
     /* Initialize Wi-Fi including netif with default config */
     esp_netif_create_default_wifi_sta();
@@ -386,25 +443,36 @@ static esp_err_t wifi_prov_setup(void) {
         ESP_LOGI(TAG, "Device not provisioned, starting provisioning");
 
         /* Get device service name from MAC address */
-        char service_name[12];
+        char service_name[13];
         get_device_service_name(service_name, sizeof(service_name));
 
+        /* Use Security 1 with proof of possession */
         /* Use Security 1 with proof of possession */
         wifi_prov_security_t security = WIFI_PROV_SECURITY_1;
         const char *pop = "abcd1234";
         const char *service_key = NULL;
+        //wifi_prov_security1_params_t sec1_params = {
+        //    .data     = (const void *)pop,
+        //    .data_len = strlen(pop),
+        //};
 
         /* Start provisioning service */
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(security, (const void *) pop, service_name, service_key));
 
-        /* Print provisioning info */
+        /* Print provisioning info and QR code */
         ESP_LOGI(TAG, "Provisioning started");
         ESP_LOGI(TAG, "Service Name: %s", service_name);
         ESP_LOGI(TAG, "PoP (Proof of Possession): %s", pop);
-        ESP_LOGI(TAG, "Scan the QR code with your phone to provision the device");
+        
+        /* Print QR code for provisioning */
+#ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
+        wifi_prov_print_qr(service_name, NULL, pop, PROV_TRANSPORT_BLE);
+#else /* CONFIG_EXAMPLE_PROV_TRANSPORT_SOFTAP */
+        wifi_prov_print_qr(service_name, NULL, pop, PROV_TRANSPORT_SOFTAP);
+#endif /* CONFIG_EXAMPLE_PROV_TRANSPORT_BLE */
     } else {
         ESP_LOGI(TAG, "Device already provisioned, connecting to WiFi");
-        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
+        //ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
         wifi_init_sta();
     }
 
@@ -429,7 +497,9 @@ static void display_update_task(void *arg) {
     EventBits_t bits = xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT,
                                             pdFALSE, pdTRUE, pdMS_TO_TICKS(60000));
     if (!(bits & WIFI_CONNECTED_EVENT)) {
-        ESP_LOGW(TAG, "WiFi not connected after 60 seconds, proceeding anyway");
+        ESP_LOGW(TAG, "WiFi not connected after 60 seconds, waiting...");
+        xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT,
+                            pdFALSE, pdTRUE, portMAX_DELAY);
     }
 
     /* Initialize MQTT */
@@ -445,24 +515,17 @@ static void display_update_task(void *arg) {
 
     /* Main display loop */
     while (1) {
+    if (mqtt_temp_has_new_data()) {
         float temp_celsius = mqtt_temp_get_value();
+        mqtt_temp_clear_new_data_flag();
 
         if (!isnan(temp_celsius)) {
-            /* Convert to Fahrenheit for display */
             float temp_fahrenheit = celsius_to_fahrenheit(temp_celsius);
-            
-            /* Display temperature */
             ESP_LOGI(TAG, "Displaying temperature: %.1f°F (%.1f°C)", temp_fahrenheit, temp_celsius);
             neopixel_display_temperature(temp_fahrenheit);
-            mqtt_temp_clear_new_data_flag();
-        } else {
-            /* No valid temperature yet - show idle pattern */
-            ESP_LOGD(TAG, "Waiting for temperature data...");
-            neopixel_display_clear();
         }
-
-        /* Update every 100ms */
-        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    vTaskDelay(pdMS_TO_TICKS(500));
     }
 }
 

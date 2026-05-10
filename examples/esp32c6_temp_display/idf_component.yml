@@ -6,3 +6,4 @@ dependencies:
     version: '>=4.4.0'
   ## NeoPixel library for LED control
   zorxx/neopixel: '*'
+  espressif/qrcode: ^0.2.0
