@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Temperature Display - NeoPixel 7-Segment Display Driver Implementation
+ * Displays temperature values in Fahrenheit with color-coded temperature ranges
  */
 
 #include <stdio.h>
@@ -24,23 +25,91 @@ static uint8_t brightness = 255;
 /* Thread safety */
 static portMUX_TYPE neopixel_mux = portMUX_INITIALIZER_UNLOCKED;
 
-/* Decimal point is the 8th segment (optional, not used for temp display) */
+/*
+7-segment layout
+corresponding to bits 0-6 in the segment pattern (MSB = segment a, LSB = segment g):
+a b c d e f g
+
+  --a--
+ |     |
+ f     b
+ |     |
+  --g--
+ |     |
+ e     c
+ |     |
+  --d--
+
+*/
+
+const uint8_t SEG_P = 0b1100111; // a b e f g
+const uint8_t SEG_R = 0b0000101; // e g (limited representation)
+const uint8_t SEG_O = 0b0011101; // c d e g
+
+const uint8_t SEG_E = 0b1001111; // a d e f g
+
+const uint8_t SEG_B = 0b0011111; // c d e f g (lowercase b style)
+const uint8_t SEG_L = 0b0001110; // d e f
+const uint8_t SEG_S = 0b1011011; // a c d f g (like “5”)
+const uint8_t SEG_U = 0b0111110; // b c d e f (like “U”)
+const uint8_t SEG_C = 0b1001110; // a d e f (like “C”)
+const uint8_t SEG_Y = 0b0110011; // b c f g (like “Y”)
+
+const uint8_t SEG_0 = 0b1111110; /* 0 = a,b,c,d,e,f */
+const uint8_t SEG_1 = 0b1000010; /* 1 = b,c */
+const uint8_t SEG_2 = 0b0110111; /* 2 = a,b,d,e,g */
+const uint8_t SEG_3 = 0b1100111; /* 3 = a,b,c,d,g */
+const uint8_t SEG_4 = 0b1001011; /* 4 = b,c,f,g */
+const uint8_t SEG_5 = 0b1101101; /* 5 = a,c,d,f,g */
+const uint8_t SEG_6 = 0b1111101; /* 6 = a,c,d,e,f,g */
+const uint8_t SEG_7 = 0b1000110; /* 7 = a,b,c */
+const uint8_t SEG_8 = 0b1111111; /* 8 = a,b,c,d,e,f,g */
+const uint8_t SEG_9 = 0b1101111; /* 9 = a,b,c,d,f,g */
 
 /* 7-segment patterns (bit 0-6 = segments a-g) */
 const uint8_t digitPatterns[10] = {
-    0b0111111, /* 0 = a,b,c,d,e,f */
-    0b0000110, /* 1 = b,c */
-    0b1011011, /* 2 = a,b,d,e,g */
-    0b1001111, /* 3 = a,b,c,d,g */
-    0b1100110, /* 4 = b,c,f,g */
+    0b1111110, /* 0 = a,b,c,d,e,f */
+    0b1000010, /* 1 = b,c */
+    0b0110111, /* 2 = a,b,d,e,g */
+    0b1100111, /* 3 = a,b,c,d,g */
+    0b1001011, /* 4 = b,c,f,g */
     0b1101101, /* 5 = a,c,d,f,g */
     0b1111101, /* 6 = a,c,d,e,f,g */
-    0b0000111, /* 7 = a,b,c */
+    0b1000110, /* 7 = a,b,c */
     0b1111111, /* 8 = a,b,c,d,e,f,g */
     0b1101111  /* 9 = a,b,c,d,f,g */
 };
 
-/* Decimal point is the 8th segment (optional, not used for temp display) */
+const uint8_t ERROR_PATTERN[] = {
+    SEG_E,
+    SEG_R,
+    SEG_R,
+};
+
+const uint8_t PROVISIONING_PATTERN[] = {
+    SEG_P,
+    SEG_R,
+    SEG_O
+};
+
+const uint8_t PROVISIONING_SUCCESS_PATTERN[] = {
+    SEG_S,
+    SEG_U,
+    SEG_C
+};
+
+const uint8_t BLE_PATTERN[] = {
+    SEG_B,
+    SEG_L,
+    SEG_E
+};
+
+const uint8_t YES_PATTERN[] = {
+    SEG_Y,
+    SEG_E,
+    SEG_S
+};
+
 
 /**
  * @brief Get LED index for a specific digit and segment
@@ -99,12 +168,12 @@ void neopixel_display_deinit(void) {
 }
 
 void neopixel_get_color_for_temp(float temperature, uint8_t *r, uint8_t *g, uint8_t *b) {
-    /* Color mapping:
-       Cold (-20°C): Green (0, 255, 0)
-       Cool (5°C): Cyan (0, 255, 255)
-       Warm (20°C): Yellow (255, 255, 0)
-       Hot (35°C): Orange (255, 165, 0)
-       Hotter (50°C): Red (255, 0, 0)
+    /* Color mapping (Fahrenheit scale):
+       Cold (32°F): Green (0, 255, 0)
+       Cool (50°F): Cyan (0, 255, 255)
+       Comfortable (70°F): Yellow (255, 255, 0)
+       Hot (85°F): Orange (255, 165, 0)
+       Very Hot (100°F): Red (255, 0, 0)
     */
     
     if (temperature <= TEMP_COLD_MIN) {
@@ -152,7 +221,7 @@ esp_err_t neopixel_display_temperature(float temperature) {
 
     /* Clamp temperature for display purposes */
     float displayTemp = temperature;
-    if (displayTemp > 99.9f) displayTemp = 99.9f;
+    if (displayTemp > 999.9f) displayTemp = 999.9f;
     if (displayTemp < -99.9f) displayTemp = -99.9f;
 
     /* Get color for current temperature */
@@ -188,6 +257,11 @@ esp_err_t neopixel_display_temperature(float temperature) {
             if (digit_idx == 0) digit_value = hundreds;
             else if (digit_idx == 1) digit_value = tens;
             else digit_value = ones;
+        }
+        
+        /* Skip first digit if it's zero (leading zero suppression) */
+        if (digit_idx == 0 && digit_value == 0) {
+            continue;
         }
         
         /* Get 7-segment pattern for this digit */
@@ -242,3 +316,92 @@ esp_err_t neopixel_display_set_brightness(uint8_t new_brightness) {
     ESP_LOGI(TAG, "Brightness set to %d", new_brightness);
     return ESP_OK;
 }
+
+esp_err_t neopixel_display_pattern(const uint8_t *pattern, int num_digits, uint8_t r, uint8_t g, uint8_t b) {
+    if (neopixel_ctx == NULL) {
+        ESP_LOGE(TAG, "Display not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    tNeopixel pixels[TOTAL_LEDS];
+    for (int i = 0; i < TOTAL_LEDS; i++) {
+        pixels[i].index = i;
+        pixels[i].rgb = 0x000000;  // Default: off
+    }
+
+    uint32_t color_rgb = applyBrightness(r, g, b);
+
+    for (int digit_idx = 0; digit_idx < num_digits; digit_idx++) {
+        uint8_t seg_pattern = pattern[digit_idx];
+        for (int segment = 0; segment < 7; segment++) {
+            if (seg_pattern & (1 << segment)) {
+                int start_idx = segmentStartIndex(digit_idx, segment);
+                for (int led = 0; led < LEDS_PER_SEGMENT && start_idx + led < TOTAL_LEDS; led++) {
+                    pixels[start_idx + led].rgb = color_rgb;
+                }
+            }
+        }
+    }
+
+    if (!neopixel_SetPixel(neopixel_ctx, pixels, TOTAL_LEDS)) {
+        ESP_LOGE(TAG, "Failed to set pattern pixels");
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t neopixel_display_provisioning(void) {
+    /* Display all segments in cyan (RGB mode for provisioning indicator) */
+    if (neopixel_ctx == NULL) {
+        ESP_LOGE(TAG, "Display not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // int total_pixels = TOTAL_LEDS;
+    // tNeopixel pixels[total_pixels];
+    
+    // /* Fill all pixels with cyan (blue + green) */
+    // uint32_t cyan = applyBrightness(0, 255, 255);
+    
+    // for (int i = 0; i < total_pixels; i++) {
+    //     pixels[i].index = i;
+    //     pixels[i].rgb = cyan;
+    // }
+    
+    // if (!neopixel_SetPixel(neopixel_ctx, pixels, total_pixels)) {
+    //     ESP_LOGE(TAG, "Failed to set provisioning indicator");
+    //     return ESP_FAIL;
+    // }
+    
+    // return ESP_OK;
+    return neopixel_display_pattern(PROVISIONING_PATTERN, 3, 0, 255, 255);
+}
+
+esp_err_t neopixel_display_provisioning_success(void) {
+    /* Display all segments in green */
+    if (neopixel_ctx == NULL) {
+        ESP_LOGE(TAG, "Display not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // int total_pixels = TOTAL_LEDS;
+    // tNeopixel pixels[total_pixels];
+    
+    // /* Fill all pixels with green */
+    // uint32_t green = applyBrightness(0, 255, 0);
+    
+    // for (int i = 0; i < total_pixels; i++) {
+    //     pixels[i].index = i;
+    //     pixels[i].rgb = green;
+    // }
+    
+    // if (!neopixel_SetPixel(neopixel_ctx, pixels, total_pixels)) {
+    //     ESP_LOGE(TAG, "Failed to set provisioning success indicator");
+    //     return ESP_FAIL;
+    // }
+    
+    // return ESP_OK;
+    return neopixel_display_pattern(PROVISIONING_SUCCESS_PATTERN, 3, 0, 255, 0);
+}
+

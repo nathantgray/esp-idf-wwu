@@ -1,30 +1,32 @@
 menu "Temperature Display Configuration"
 
     menu "Provisioning Service"
-        config PROV_TRANSPORT_BLE
-            bool "SoftAP + BLE"
-            default y
-            help
-                If this option is enabled, use both BLE and SoftAP for provisioning.
+        choice EXAMPLE_PROV_TRANSPORT
+            bool "Provisioning Transport"
+            default EXAMPLE_PROV_TRANSPORT_BLE
 
-        config PROV_TRANSPORT_SOFTAP
-            bool "SoftAP only"
-            depends on !PROV_TRANSPORT_BLE
-            default y
-            help
-                If this option is enabled, use SoftAP only for provisioning.
+            config EXAMPLE_PROV_TRANSPORT_BLE
+                bool "BLE"
+                select BT_ENABLED
+                depends on !IDF_TARGET_ESP32S2
 
-        config EXAMPLE_PROV_SECURITY_VERSION
-            int
-            default 1
-            help
-                The example uses Wi-Fi Provisioning Manager's auto-start feature.
+            config EXAMPLE_PROV_TRANSPORT_SOFTAP
+                bool "Soft AP"
+                select LWIP_IPV4
+        endchoice
 
-        config EXAMPLE_PROV_SECURITY_VERSION_2
-            bool "Use Security Version 2 for Provisioning"
-            default y
-            help
-                Use Wi-Fi Provisioning Manager's Security Version 2 for provisioning.
+        choice EXAMPLE_PROV_SECURITY_VERSION
+            bool "Protocomm security version"
+            default EXAMPLE_PROV_SECURITY_VERSION_1
+
+            config EXAMPLE_PROV_SECURITY_VERSION_1
+                bool "Security version 1"
+                select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_1
+
+            config EXAMPLE_PROV_SECURITY_VERSION_2
+                bool "Security version 2"
+                select ESP_PROTOCOMM_SUPPORT_SECURITY_VERSION_2
+        endchoice
 
         config EXAMPLE_PROV_SEC2_DEV_MODE
             bool "Use Security Version 2 Dev Mode"
@@ -44,6 +46,12 @@ menu "Temperature Display Configuration"
             default "abcd1234"
             help
                 Proof of Possession for provisioning security.
+        
+        config EXAMPLE_PROV_SHOW_QR
+            bool "Show provisioning QR code"
+            default y
+            help
+                Show the QR code for provisioning.
 
     endmenu
 
