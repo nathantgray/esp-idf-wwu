@@ -85,6 +85,18 @@ esp_err_t neopixel_display_clear(void);
 esp_err_t neopixel_display_set_brightness(uint8_t brightness);
 
 /**
+ * @brief Display a custom pattern on the 3-digit 7-segment display
+ *
+ * @param pattern Array of segment patterns for each digit
+ * @param num_digits Number of digits to display
+ * @param r Red component (0-255)
+ * @param g Green component (0-255)
+ * @param b Blue component (0-255)
+ * @return ESP_OK on success, error code otherwise
+ */
+esp_err_t neopixel_display_pattern(const uint8_t *pattern, int num_digits, uint8_t r, uint8_t g, uint8_t b);
+
+/**
  * @brief Display provisioning mode indicator (blinking blue)
  *
  * @return ESP_OK on success, error code otherwise
