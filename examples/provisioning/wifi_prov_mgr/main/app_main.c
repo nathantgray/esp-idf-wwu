@@ -40,6 +40,35 @@
 
 #include <wifi_provisioning/manager.h>
 
+/* LEDs: Seeed Studio XIAO ESP32C6 — D8=DIGITAL 8, D9=DIGITAL 9 */
+#define LED_POWER_GPIO    GPIO_NUM_17
+#define LED_PROV_GPIO     GPIO_NUM_19
+
+static void leds_init(void)
+{
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << LED_POWER_GPIO) | (1ULL << LED_PROV_GPIO);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+
+    /* Default: power LED off until explicitly set; provisioning LED off */
+    gpio_set_level(LED_POWER_GPIO, 0);
+    gpio_set_level(LED_PROV_GPIO, 0);
+}
+
+static inline void led_power_set(bool on)
+{
+    gpio_set_level(LED_POWER_GPIO, on ? 1 : 0);
+}
+
+static inline void led_prov_set(bool on)
+{
+    gpio_set_level(LED_PROV_GPIO, on ? 1 : 0);
+}
+
 
 #ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
 #include <wifi_provisioning/scheme_ble.h>
@@ -152,6 +181,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
         switch (event_id) {
             case WIFI_PROV_START:
                 ESP_LOGI(TAG, "Provisioning started");
+                led_prov_set(true);
                 break;
             case WIFI_PROV_CRED_RECV: {
                 wifi_sta_config_t *wifi_sta_cfg = (wifi_sta_config_t *)event_data;
@@ -184,6 +214,8 @@ static void event_handler(void* arg, esp_event_base_t event_base,
                 break;
             case WIFI_PROV_END:
                 /* De-initialize manager once provisioning is finished */
+                /* Turn off provisioning LED when provisioning ends */
+                led_prov_set(false);
                 wifi_prov_mgr_deinit();
                 break;
             default:
@@ -405,8 +437,49 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
     button_pressed = true;
 }
 
+static const char *wakeup_cause_to_str(esp_sleep_wakeup_cause_t cause)
+{
+    switch (cause) {
+        case ESP_SLEEP_WAKEUP_UNDEFINED:
+            return "power on / reset";
+        case ESP_SLEEP_WAKEUP_EXT0:
+            return "external signal (RTC_IO)";
+        case ESP_SLEEP_WAKEUP_EXT1:
+            return "external signal (RTC_CNTL)";
+        case ESP_SLEEP_WAKEUP_TIMER:
+            return "timer";
+        case ESP_SLEEP_WAKEUP_TOUCHPAD:
+            return "touchpad";
+        case ESP_SLEEP_WAKEUP_ULP:
+            return "ULP";
+        case ESP_SLEEP_WAKEUP_GPIO:
+            return "GPIO";
+        case ESP_SLEEP_WAKEUP_UART:
+            return "UART";
+        default:
+            return "unknown";
+    }
+}
+
 void app_main(void)
 {
+    ESP_LOGI(TAG, "HELP");
+    esp_sleep_wakeup_cause_t wakeup_cause = esp_sleep_get_wakeup_cause();
+    ESP_LOGI(TAG, "Boot wakeup cause: %s (%d)", wakeup_cause_to_str(wakeup_cause), wakeup_cause);
+    bool reprovision_on_wakeup = false;
+
+    switch (wakeup_cause) {
+        case ESP_SLEEP_WAKEUP_GPIO:
+            ESP_LOGI(TAG, "Woke by button/GPIO: forcing Wi-Fi reprovisioning");
+            reprovision_on_wakeup = true;
+            break;
+        case ESP_SLEEP_WAKEUP_TIMER:
+            ESP_LOGI(TAG, "Woke by timer: continuing normal application flow");
+            break;
+        default:
+            break;
+    }
+    
     /* Initialize NVS partition */
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -424,6 +497,9 @@ void app_main(void)
     /* Initialize the event loop */
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     wifi_event_group = xEventGroupCreate();
+    /* Initialize LED GPIOs and turn power LED on */
+    leds_init();
+    led_power_set(true);
 
     /* Register our event handler for Wi-Fi, IP and Provisioning related events */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
@@ -488,6 +564,9 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_prov_mgr_is_provisioned(&provisioned));
 
 #endif
+    if (reprovision_on_wakeup) {
+        button_pressed = true; /* Clear the button press flag */
+    }
     /* If device is not yet provisioned start provisioning service */
     if (!provisioned) {
         ESP_LOGI(TAG, "Starting provisioning");
@@ -598,6 +677,8 @@ void app_main(void)
 #endif
         /* Start provisioning service */
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(security, (const void *) sec_params, service_name, service_key));
+        /* Ensure provisioning LED reflects active provisioning state */
+        led_prov_set(true);
 
         /* The handler for the optional endpoint created above.
          * This call must be made after starting the provisioning, and only if the endpoint
@@ -622,6 +703,7 @@ void app_main(void)
         /* We don't need the manager as device is already provisioned,
          * so let's release it's resources */
         wifi_prov_mgr_deinit();
+        led_prov_set(false);
 
         ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
         /* Start Wi-Fi station */
@@ -727,6 +809,7 @@ void app_main(void)
 
     while (1) {
         // Check if button was pressed
+        ESP_LOGI(TAG, "Loop iteration started (uptime: %lld ms)", esp_timer_get_time() / 1000);
         if (button_pressed) {
             button_pressed = false;  // Reset flag
             ESP_LOGI(TAG, "Button pressed! Resetting provisioning to connect to new WiFi...");
@@ -752,16 +835,16 @@ void app_main(void)
                          sensor_data.ambient_temp, sensor_data.object_temp);
             } else {
                 ESP_LOGE(TAG, "Failed to read from GY-906");
-                sensor_data.ambient_temp = -999.0f;
-                sensor_data.object_temp = -999.0f;
+                sensor_data.ambient_temp = -100.0f;
+                sensor_data.object_temp = -100.0f;
             }
             // sensor_data.battery_voltage = pawsaver_battery_read();
             /* mode and battery_voltage set after ADC read below */
         } else {
             ESP_LOGW(TAG, "GY-906 not available, using debug data");
             sensor_data.timestamp = (int64_t)(esp_timer_get_time() / 1000000);
-            sensor_data.ambient_temp = -999.0f;  /* Sentinel value indicating no sensor */
-            sensor_data.object_temp = -999.0f;
+            sensor_data.ambient_temp = -100.0f;  /* Sentinel value indicating no sensor */
+            sensor_data.object_temp = -100.0f;
             sensor_data.battery_voltage = 0.0f; // will be updated by ADC read below
             ESP_LOGI(TAG, "Using debug data: battery=%.2fV", sensor_data.battery_voltage);
         }
@@ -773,7 +856,9 @@ void app_main(void)
                 int calibrated_voltage_mv = 0;
                 ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &calibrated_voltage_mv));
                 battery_voltage_read = calibrated_voltage_mv / 1000.0f;
-                sensor_data.battery_voltage = battery_voltage_read * 1.487f;
+                sensor_data.battery_voltage = battery_voltage_read * 1.477f;
+                ESP_LOGI(TAG, "Battery ADC: raw=%d, cal=%.3fV, scaled=%.3fV",
+                         adc_raw[0][0], battery_voltage_read, sensor_data.battery_voltage);
             }
         } else {
             ESP_LOGE(TAG, "Failed to read battery voltage from ADC");
@@ -790,7 +875,7 @@ void app_main(void)
         }
         sensor_data.mode = current_mode;
         ESP_LOGI(TAG, "Battery: %.2fV | Mode: %d | On-interval: %dms",
-                 sensor_data.battery_voltage, (int)current_mode, on_interval);
+                sensor_data.battery_voltage, (int)current_mode, on_interval);
         
         bool mqtt_connected = false;
         for (int mqtt_attempt = 1; mqtt_attempt <= 2 && !mqtt_connected; mqtt_attempt++) {
@@ -841,8 +926,10 @@ void app_main(void)
                 example_adc_calibration_deinit(adc1_cali_chan1_handle);
                 adc1_cali_chan1_handle = NULL;
             }
+
             esp_sleep_enable_timer_wakeup((uint64_t)sleep_secs * uS_TO_S_FACTOR);
-            esp_deep_sleep_start();
+            esp_deep_sleep_start(); 
+            //esp_light_sleep_start();
         }
      }
 #endif

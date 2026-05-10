@@ -30,8 +30,8 @@ typedef enum {
 /* Sleep durations in seconds */
 #define TIME_TO_SLEEP_DEBUG     15       /**< Debug mode: 5 second sleep */
 #define TIME_TO_SLEEP_SHORT     60      /**< Normal mode: 60 second sleep */
-#define TIME_TO_SLEEP_LONG      300     /**< Low power mode: 5 minute sleep */
-#define TIME_TO_SLEEP_DEAD      3600    /**< Dead mode: 1 hour sleep */
+#define TIME_TO_SLEEP_LONG      35     /**< Low power mode: 5 minute sleep */
+#define TIME_TO_SLEEP_DEAD      30    /**< Dead mode: 1 hour sleep */
 
 /* Battery voltage thresholds (in Volts) */
 #define BATTERY_MIN_VOLTAGE     3.73f   /**< Below this = DEAD mode */
