@@ -856,7 +856,7 @@ void app_main(void)
                 int calibrated_voltage_mv = 0;
                 ESP_ERROR_CHECK(adc_cali_raw_to_voltage(adc1_cali_chan0_handle, adc_raw[0][0], &calibrated_voltage_mv));
                 battery_voltage_read = calibrated_voltage_mv / 1000.0f;
-                sensor_data.battery_voltage = battery_voltage_read * 1.477f;
+                sensor_data.battery_voltage = battery_voltage_read * 2.4517f;
                 ESP_LOGI(TAG, "Battery ADC: raw=%d, cal=%.3fV, scaled=%.3fV",
                          adc_raw[0][0], battery_voltage_read, sensor_data.battery_voltage);
             }
