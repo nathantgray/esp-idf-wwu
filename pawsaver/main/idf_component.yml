@@ -1,0 +1,8 @@
+dependencies:
+  qrcode: ^0.1.0
+  espressif/mqtt: ^1.0.0
+  espressif/mdns: "*"
+depends_components:
+- esp_driver_gpio
+- mqtt
+- json
