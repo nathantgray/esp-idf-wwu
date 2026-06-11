@@ -1,19 +1,12 @@
 # PawSver
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen.svg)
-
----
-
 ## Table of Contents
 - [Overview](#overview)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
 - [Usage](#usage)
-- [Safety Thresholds](#safety-thresholds)
 - [Contributing](#contributing)
-- [License](#license)
 - [Acknowledgements](#acknowledgements)
 
 ---
@@ -59,15 +52,6 @@ Explain API keys, sensor setup, environment variables, etc.
 ## Usage
 How to take a reading and interpret results.
 
----
-
-## Safety Thresholds
-
-| Temperature (°F) | Temperature (°C) | Status  | Recommendation         |
-|------------------|------------------|---------|------------------------|
-| Below 100°F      | Below 38°C       | ✅ Safe  | Safe to walk           |
-| 100°F – 120°F    | 38°C – 49°C      | ⚠️ Caution | Limit walk duration |
-| Above 120°F      | Above 49°C       | 🚫 Danger | Do not walk            |
 
 ---
 
