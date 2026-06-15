@@ -44,30 +44,11 @@
 #define LED_POWER_GPIO    GPIO_NUM_17
 #define LED_PROV_GPIO     GPIO_NUM_19
 
-static void leds_init(void)
-{
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << LED_POWER_GPIO) | (1ULL << LED_PROV_GPIO);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_conf);
+// Define GPIO pins
+#define GPIO_OUTPUT_PIN      GPIO_NUM_14  // GPIO for powering device
+#define GPIO_WAKEUP_PIN      GPIO_NUM_1   // GPIO for wakeup button
 
-    /* Default: power LED off until explicitly set; provisioning LED off */
-    gpio_set_level(LED_POWER_GPIO, 0);
-    gpio_set_level(LED_PROV_GPIO, 0);
-}
 
-static inline void led_power_set(bool on)
-{
-    gpio_set_level(LED_POWER_GPIO, on ? 1 : 0);
-}
-
-static inline void led_prov_set(bool on)
-{
-    gpio_set_level(LED_PROV_GPIO, on ? 1 : 0);
-}
 
 
 #ifdef CONFIG_EXAMPLE_PROV_TRANSPORT_BLE
@@ -154,8 +135,12 @@ static esp_err_t example_get_sec2_verifier(const char **verifier, uint16_t *veri
 const int WIFI_CONNECTED_EVENT = BIT0;
 static EventGroupHandle_t wifi_event_group;
 
+static volatile int wifi_conn_attempts = 0;
+
 /* Button press flag for reprovisioning */
 static volatile bool button_pressed = false;
+const int BUTTON_PRESSED_EVENT = BIT1;
+
 
 #define PROV_QR_VERSION         "v1"
 #define PROV_TRANSPORT_SOFTAP   "softap"
@@ -172,6 +157,78 @@ static volatile bool button_pressed = false;
 #define EXAMPLE_ADC_ATTEN           ADC_ATTEN_DB_12
 static int adc_raw[2][10];
 float battery_voltage_read = 0.00f;
+
+
+static void IRAM_ATTR gpio_isr_handler(void* arg) {
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    button_pressed = true;
+    xEventGroupSetBitsFromISR(wifi_event_group, BUTTON_PRESSED_EVENT, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+
+}
+/* GPIO interrupt handler for button press */
+// static void IRAM_ATTR gpio_isr_handler(void* arg)
+// {
+//     button_pressed = true;
+// }
+
+static void button_init(void)
+{
+    // Configure wakeup button GPIO (GPIO1) as input with pull-up and interrupt
+    gpio_config_t wakeup_config = {
+        .pin_bit_mask = (1ULL << GPIO_WAKEUP_PIN),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,    // Enable pull-up for button
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_NEGEDGE,      // Trigger on falling edge (button press)
+    };
+    gpio_config(&wakeup_config);
+    
+    // Install GPIO ISR service and add handler for the button
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(GPIO_WAKEUP_PIN, gpio_isr_handler, (void*) GPIO_WAKEUP_PIN);
+
+}
+
+static void antenna_init(void)
+{
+    // Configure output GPIO (GPIO14) for powering device
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << GPIO_OUTPUT_PIN);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+
+    // Set GPIO14 high to power on the device connected to this GPIO
+    gpio_set_level(GPIO_OUTPUT_PIN, 1);
+}
+
+static void leds_init(void)
+{
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << LED_POWER_GPIO) | (1ULL << LED_PROV_GPIO);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+
+    /* Default: power LED off until explicitly set; provisioning LED off */
+    gpio_set_level(LED_POWER_GPIO, 0);
+    gpio_set_level(LED_PROV_GPIO, 0);
+}
+
+static inline void led_power_set(bool on)
+{
+    gpio_set_level(LED_POWER_GPIO, on ? 1 : 0);
+}
+
+static inline void led_prov_set(bool on)
+{
+    gpio_set_level(LED_PROV_GPIO, on ? 1 : 0);
+}
 
  /* Event handler for catching system events */
 static void event_handler(void* arg, esp_event_base_t event_base,
@@ -431,11 +488,11 @@ static int get_on_interval_for_mode(pawsaver_mode_t mode)
 static bool example_adc_calibration_init(adc_unit_t unit, adc_channel_t channel, adc_atten_t atten, adc_cali_handle_t *out_handle);
 static void example_adc_calibration_deinit(adc_cali_handle_t handle);
 
-/* GPIO interrupt handler for button press */
-static void IRAM_ATTR gpio_isr_handler(void* arg)
-{
-    button_pressed = true;
-}
+// /* GPIO interrupt handler for button press */
+// static void IRAM_ATTR gpio_isr_handler(void* arg)
+// {
+//     button_pressed = true;
+// }
 
 static const char *wakeup_cause_to_str(esp_sleep_wakeup_cause_t cause)
 {
@@ -500,6 +557,8 @@ void app_main(void)
     /* Initialize LED GPIOs and turn power LED on */
     leds_init();
     led_power_set(true);
+    antenna_init();
+    button_init();
 
     /* Register our event handler for Wi-Fi, IP and Provisioning related events */
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
@@ -711,59 +770,73 @@ void app_main(void)
     }
 
     /* Wait for Wi-Fi connection */
-    xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
+    // xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
+    // Wait for EITHER WiFi connected OR button pressed
+    EventBits_t bits = xEventGroupWaitBits(
+        wifi_event_group,
+        WIFI_CONNECTED_EVENT | BUTTON_PRESSED_EVENT,
+        pdTRUE,   // clear on exit
+        pdFALSE,  // wait for ANY bit, not all
+        portMAX_DELAY
+    );
+
+    if (bits & BUTTON_PRESSED_EVENT) {
+        ESP_LOGI(TAG, "Button pressed during connection — reprovisioning");
+        wifi_prov_mgr_reset_provisioning();
+        esp_restart();
+    }
 
     /* Initialize mDNS so .local hostnames (e.g. homeassistant.local) can be resolved */
     ESP_ERROR_CHECK(mdns_init());
 
     /* Start main application now */
-#if CONFIG_EXAMPLE_REPROVISIONING
-    while (1) {
-        for (int i = 0; i < 10; i++) {
-            ESP_LOGI(TAG, "Hello World!");
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
+// #if CONFIG_EXAMPLE_REPROVISIONING
+//     while (1) {
+//         for (int i = 0; i < 10; i++) {
+//             ESP_LOGI(TAG, "Hello World!");
+//             vTaskDelay(1000 / portTICK_PERIOD_MS);
+//         }
 
-        /* Resetting provisioning state machine to enable re-provisioning */
-        wifi_prov_mgr_reset_sm_state_for_reprovision();
+//         /* Resetting provisioning state machine to enable re-provisioning */
+//         wifi_prov_mgr_reset_sm_state_for_reprovision();
 
-        /* Wait for Wi-Fi connection */
-        xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
-    }
-#else
-
-
+//         /* Wait for Wi-Fi connection */
+//         xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_EVENT, true, true, portMAX_DELAY);
+//     }
+// #else
 
 
-    // Define GPIO pins
-    #define GPIO_OUTPUT_PIN      GPIO_NUM_14  // GPIO for powering device
-    #define GPIO_WAKEUP_PIN      GPIO_NUM_1   // GPIO for wakeup button
 
-    // Configure output GPIO (GPIO14) for powering device
-    gpio_config_t io_conf = {};
-    io_conf.intr_type = GPIO_INTR_DISABLE;
-    io_conf.mode = GPIO_MODE_OUTPUT;
-    io_conf.pin_bit_mask = (1ULL << GPIO_OUTPUT_PIN);
-    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&io_conf);
 
-    // Configure wakeup button GPIO (GPIO1) as input with pull-up and interrupt
-    gpio_config_t wakeup_config = {
-        .pin_bit_mask = (1ULL << GPIO_WAKEUP_PIN),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,    // Enable pull-up for button
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_NEGEDGE,      // Trigger on falling edge (button press)
-    };
-    gpio_config(&wakeup_config);
+    // // Define GPIO pins
+    // #define GPIO_OUTPUT_PIN      GPIO_NUM_14  // GPIO for powering device
+    // #define GPIO_WAKEUP_PIN      GPIO_NUM_1   // GPIO for wakeup button
+
+    // // Configure output GPIO (GPIO14) for powering device
+    // gpio_config_t io_conf = {};
+    // io_conf.intr_type = GPIO_INTR_DISABLE;
+    // io_conf.mode = GPIO_MODE_OUTPUT;
+    // io_conf.pin_bit_mask = (1ULL << GPIO_OUTPUT_PIN);
+    // io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    // io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    // gpio_config(&io_conf);
+
+    // // Configure wakeup button GPIO (GPIO1) as input with pull-up and interrupt
+    // gpio_config_t wakeup_config = {
+    //     .pin_bit_mask = (1ULL << GPIO_WAKEUP_PIN),
+    //     .mode = GPIO_MODE_INPUT,
+    //     .pull_up_en = GPIO_PULLUP_ENABLE,    // Enable pull-up for button
+    //     .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    //     .intr_type = GPIO_INTR_NEGEDGE,      // Trigger on falling edge (button press)
+    // };
+    // gpio_config(&wakeup_config);
     
-    // Install GPIO ISR service and add handler for the button
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(GPIO_WAKEUP_PIN, gpio_isr_handler, (void*) GPIO_WAKEUP_PIN);
+    // // Install GPIO ISR service and add handler for the button
+    // gpio_install_isr_service(0);
+    // gpio_isr_handler_add(GPIO_WAKEUP_PIN, gpio_isr_handler, (void*) GPIO_WAKEUP_PIN);
     
     // Set GPIO14 high to power on the device connected to this GPIO
-    gpio_set_level(GPIO_OUTPUT_PIN, 1);
+    // gpio_set_level(GPIO_OUTPUT_PIN, 1);
     
     unsigned long wakeTime;
     wakeTime = esp_timer_get_time() / 1000ULL; // Convert to milliseconds
@@ -932,7 +1005,7 @@ void app_main(void)
             //esp_light_sleep_start();
         }
      }
-#endif
+// #endif
 
 }
 
