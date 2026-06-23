@@ -5,8 +5,11 @@ Made by the WWU Engineers Without Borders Club for the Blue Mountain Humane Soci
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Getting Started](#getting-started)
+- [Home Assistent](#home-assistant)
+- [Misc](#misc-inststucion)
 - [Usage](#usage)
 - [Acknowledgements](#acknowledgements)
+
 
 ---
 
@@ -50,7 +53,7 @@ PawSaver is an ESP32-C6 based sensor that monitors ground (pavement) temperature
 - An MLX90614 (GY-906) IR thermometer module wired to I2C
 - An MQTT broker reachable on your network (e.g., Home Assistant with the Mosquitto broker add-on)
 
-### Installation
+### Softare Ware Installation
 ```bash
 # Clone the repository
 git clone https://github.com/nathantgray/esp-idf-wwu.git
@@ -73,6 +76,10 @@ idf.py build
 # Finally, flash the build to the ESP32-C6 and monitor the serial output
 idf.py flash monitor
 ```
+
+### Hardware Installation
+TBD
+
 ---
 ### Home Assistant
 TBD
@@ -89,6 +96,23 @@ Run `idf.py menuconfig` and open the **PawSaver Configuration** menu to set:
 - `PAWSAVER_BATTERY_ADC_CHANNEL` / `PAWSAVER_VOLTAGE_DIVIDER_RATIO` – battery voltage measurement settings
 
 Wi-Fi credentials are not stored in the firmware. On first boot (or after a reset/re-provision), the device starts the Wi-Fi Provisioning Manager — scan the printed QR code (or use the URL printed over serial) with the ESP provisioning app to send it your network's SSID and password.
+
+--
+
+## Misc Inststucion
+
+### Manuel Charging
+In the event the bettery is full discharge and the sun is not out or solar plane fails here are the steps to e manuel charge the battery.
+1. Remove the housing and set it up where you want to charge it and open its lid. 
+2. Get a USB-C cable it does not matter that the other side is as long as one side is USB-C
+3. There will be two USB-C Female connections one on a black board and the other on the white board. Connect the USB-C on the black board.
+4. After this wait a couple of hours to make sure the battery is full charge.
+5. After the wait disconnet and wait a couple of mintues to make sure the Temperature is updaing.
+  * Using your hand and the floor is a easy way to do this
+6. If the temperature is updaing them simiple put the housing where is was before it and will countiune is normal operation
+
+### Season Care
+
 
 ---
 
